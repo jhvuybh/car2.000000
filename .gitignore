@@ -1,0 +1,16 @@
+# CCS/Theia build output
+Debug/
+Release/
+
+# Auto-generated language-server data and local editor settings
+.clangd
+.vscode/
+.cache/
+
+# Common temporary files
+*.log
+*.tmp
+*.bak
+*.swp
+Thumbs.db
+Desktop.ini
