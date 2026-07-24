@@ -2,13 +2,17 @@
 #include "system_time.h"
 
 #define PWM_MAX_DUTY      6000// 最大占空比/10000
-#define CROSS_CENTER_TIME_MS  600U        //检测到十字路口后，继续向前行驶的时间。
-#define TURN_90_TIME_MS       1100U       // 90度转弯时间
 
-#define CROSS_FORWARD_SPEED   200.0f    // 检测到十字路口后，继续向前行驶的速度
-#define TURN_90_SPEED         200.0f   // 90度转弯速度
+//转弯参数
+#define CROSS_FORWARD_SPEED   300.0f    // 检测到十字路口后，继续向前行驶的速度
+#define TURN_90_SPEED         300.0f   // 90度转弯速度
+#define CROSS_CENTER_TIME_MS  800U //继续行驶时间
+#define TURN_90_TIME_MS       980U //转弯时间
 
-extern uint8_t huidu_value[8];
+//设置掉头参数
+#define TURN_AROUND_TIME_MS    2000U //掉头时间
+#define TURN_AROUND_SPEED      300.0f //掉头速度
+
 
 
 
@@ -60,6 +64,55 @@ void motor_set_duty(uint8_t motor_id, uint32_t duty)
     }
 }
 
+// direction: 0 停止，1 正转，2 反转
+void motor_set_direction(uint8_t motor_id, uint8_t direction)
+{
+    if(motor_id == 1){
+        if(direction == 0){
+            DL_GPIO_setPins(DC_MOTOR_AIN1_PORT, DC_MOTOR_AIN1_PIN);
+            DL_GPIO_setPins(DC_MOTOR_AIN2_PORT, DC_MOTOR_AIN2_PIN);
+        }
+        else if(direction == 1){
+            DL_GPIO_setPins(DC_MOTOR_AIN1_PORT, DC_MOTOR_AIN1_PIN);
+            DL_GPIO_clearPins(DC_MOTOR_AIN2_PORT, DC_MOTOR_AIN2_PIN);
+        }
+        else if(direction == 2){
+            DL_GPIO_clearPins(DC_MOTOR_AIN1_PORT, DC_MOTOR_AIN1_PIN);
+            DL_GPIO_setPins(DC_MOTOR_AIN2_PORT, DC_MOTOR_AIN2_PIN);
+        }
+    }
+    else if(motor_id == 2){
+        if(direction == 0){
+            DL_GPIO_setPins(DC_MOTOR_BIN1_PORT, DC_MOTOR_BIN1_PIN);
+            DL_GPIO_setPins(DC_MOTOR_BIN2_PORT, DC_MOTOR_BIN2_PIN);
+        }
+        else if(direction == 1){
+            DL_GPIO_setPins(DC_MOTOR_BIN1_PORT, DC_MOTOR_BIN1_PIN);
+            DL_GPIO_clearPins(DC_MOTOR_BIN2_PORT, DC_MOTOR_BIN2_PIN);
+        }
+        else if(direction == 2){
+            DL_GPIO_clearPins(DC_MOTOR_BIN1_PORT, DC_MOTOR_BIN1_PIN);
+            DL_GPIO_setPins(DC_MOTOR_BIN2_PORT, DC_MOTOR_BIN2_PIN);
+        }
+    }
+}
+
+
+
+
+void car_forward()       //直行
+{
+    extern float target_speed_1;
+    extern float target_speed_2;
+    motor_set_direction( 1, 1);
+    motor_set_direction( 2, 1);
+    target_speed_1 = 300.0f;
+    target_speed_2 = 300.0f;
+}
+
+
+
+
 
 void car_stop(void)// 停止小车
 {
@@ -92,10 +145,6 @@ void car_stop(void)// 停止小车
 
 
 
-//设置掉头参数
-#define TURN_AROUND_TIME_MS    2250U //掉头时间
-#define TURN_AROUND_SPEED      200.0f //掉头速度
-
 void car_turn_around(void)// 小车掉头
 {
     uint32_t start_time;
@@ -114,7 +163,7 @@ void car_turn_around(void)// 小车掉头
 
     target_speed_1 = TURN_AROUND_SPEED;
     target_speed_2 = TURN_AROUND_SPEED;
-
+    // motor_wait_ms(TURN_AROUND_TIME_MS);
     start_time = SystemTime_GetMs();
 
     /*
@@ -137,6 +186,7 @@ void car_turn_around(void)// 小车掉头
 }
 
 
+
 static void motor_wait_ms(uint32_t wait_ms)  // 等待指定毫秒数，同时保持PID和系统时间继续运行
 {
     uint32_t start_time = SystemTime_GetMs();
@@ -147,7 +197,8 @@ static void motor_wait_ms(uint32_t wait_ms)  // 等待指定毫秒数，同时�
     }
 }
 
-   
+
+
 
 void car_turn_left_90(void)  // 小车左转90度
 {
@@ -209,38 +260,6 @@ void car_turn_right_90(void)         // 小车右转90度
     motor_set_direction(2, 1);
 }
 
-// direction: 0 停止，1 正转，2 反转
-void motor_set_direction(uint8_t motor_id, uint8_t direction)
-{
-    if(motor_id == 1){
-        if(direction == 0){
-            DL_GPIO_setPins(DC_MOTOR_AIN1_PORT, DC_MOTOR_AIN1_PIN);
-            DL_GPIO_setPins(DC_MOTOR_AIN2_PORT, DC_MOTOR_AIN2_PIN);
-        }
-        else if(direction == 1){
-            DL_GPIO_setPins(DC_MOTOR_AIN2_PORT, DC_MOTOR_AIN2_PIN);
-            DL_GPIO_clearPins(DC_MOTOR_AIN1_PORT, DC_MOTOR_AIN1_PIN);
-        }
-        else if(direction == 2){
-            DL_GPIO_clearPins(DC_MOTOR_AIN2_PORT, DC_MOTOR_AIN2_PIN);
-            DL_GPIO_setPins(DC_MOTOR_AIN1_PORT, DC_MOTOR_AIN1_PIN);
-        }
-    }
-    else if(motor_id == 2){
-        if(direction == 0){
-            DL_GPIO_setPins(DC_MOTOR_BIN1_PORT, DC_MOTOR_BIN1_PIN);
-            DL_GPIO_setPins(DC_MOTOR_BIN2_PORT, DC_MOTOR_BIN2_PIN);
-        }
-        else if(direction == 1){
-            DL_GPIO_setPins(DC_MOTOR_BIN1_PORT, DC_MOTOR_BIN1_PIN);
-            DL_GPIO_clearPins(DC_MOTOR_BIN2_PORT, DC_MOTOR_BIN2_PIN);
-        }
-        else if(direction == 2){
-            DL_GPIO_clearPins(DC_MOTOR_BIN1_PORT, DC_MOTOR_BIN1_PIN);
-            DL_GPIO_setPins(DC_MOTOR_BIN2_PORT, DC_MOTOR_BIN2_PIN);
-        }
-    }
-}
 
 
 extern uint32_t counter_1_A; 
@@ -263,34 +282,41 @@ void calculate_speed(uint8_t motor_id)
 
 
 //增量式pid控制
-float kp = 0.5; // 比例系数
-float ki = 0.4; // 积分系数
+float kp = 12.0f;          // 比例系数
+float ki = 0.04f;         // 积分系数
+float kd = 1.0f;        // 微分系数
 
 int PWM_1_duty = 0;
-float target_speed_1 = 0; // 目标速度 mm/s
-float last_error_1 = 0;
-float current_error_1 = 0;
+float target_speed_1 = 0;         // 目标速度 mm/s
+float last_error_1 = 0;          // 上一次误差
+float last_last_error_1 = 0.0f; // 上上次误差
+float current_error_1 = 0;     // 当前误差
+
 
 int PWM_2_duty = 0;
 float target_speed_2 = 0; // 目标速度 mm/s
 float last_error_2 = 0;
+float last_last_error_2 = 0.0f;
 float current_error_2 = 0;
 // 电机PID调节函数
+
 void DC_MOTOR_PID(uint8_t motor_id)
 {
     float error;
     if (motor_id == 1) {
         error = target_speed_1 - speed_1;// 计算速度误差
-        current_error_1 = error;
-        PWM_1_duty += (int)(kp * (current_error_1-last_error_1) + ki *(current_error_1));// 增量式PID公式
+        current_error_1 = error;//左电机误差
+        PWM_1_duty += (int)(kp * (current_error_1 - last_error_1) + ki *(current_error_1) + kd*(current_error_1 - 2*(last_error_1) + last_last_error_1));// 增量式PID公式
+        last_last_error_1 = last_error_1;
         last_error_1 = current_error_1;
         PWM_1_duty = limit_duty(PWM_1_duty);
         motor_set_duty(motor_id, PWM_1_duty);
     }
     if (motor_id == 2) {
         error = target_speed_2 - speed_2;
-        current_error_2 = error;
-        PWM_2_duty += (int)(kp * (current_error_2-last_error_2) + ki *(current_error_2));
+        current_error_2 = error;//右电机误差
+        PWM_2_duty += (int)(kp * (current_error_2 - last_error_2) + ki *(current_error_2) + kd*(current_error_2 - 2*(last_error_2) + last_last_error_2));// 增量式PID公式
+        last_last_error_2 = last_error_2;
         last_error_2 = current_error_2;
         PWM_2_duty = limit_duty(PWM_2_duty);
         motor_set_duty(motor_id, PWM_2_duty);

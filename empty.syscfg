@@ -43,9 +43,11 @@ mux8.inputSelect = "HSCLKMUX_SYSPLL0";
 const mux12       = system.clockTree["SYSPLLMUX"];
 mux12.inputSelect = "zSYSPLLMUX_HFCLK";
 
-const pinFunction4     = system.clockTree["HFXT"];
-pinFunction4.enable    = true;
-pinFunction4.inputFreq = 40;
+const pinFunction4          = system.clockTree["HFXT"];
+pinFunction4.enable         = true;
+pinFunction4.HFCLKMonitor   = true;
+pinFunction4.HFXTStartup    = 10;
+pinFunction4.inputFreq      = 40;
 
 GPIO1.$name                         = "HUIDU";
 GPIO1.associatedPins.create(8);
@@ -111,7 +113,7 @@ GPIO2.associatedPins[8].pin.$assign      = "PA17";
 
 GPIO3.$name                         = "LED";
 GPIO3.associatedPins.create(2);
-GPIO3.associatedPins[0].$name       = "RED";
+GPIO3.associatedPins[0].$name       = "GREEN";
 GPIO3.associatedPins[0].pin.$assign = "PA13";
 GPIO3.associatedPins[1].$name       = "BLUEE";
 GPIO3.associatedPins[1].pin.$assign = "PA12";
@@ -121,6 +123,7 @@ GPIO4.associatedPins.create(5);
 GPIO4.associatedPins[0].direction        = "INPUT";
 GPIO4.associatedPins[0].internalResistor = "PULL_UP";
 GPIO4.associatedPins[0].$name            = "HUOWU";
+GPIO4.associatedPins[0].pin.$assign      = "PA16";
 GPIO4.associatedPins[1].$name            = "KEY1";
 GPIO4.associatedPins[1].direction        = "INPUT";
 GPIO4.associatedPins[1].internalResistor = "PULL_UP";
@@ -172,19 +175,23 @@ PWM1.ccp1PinConfig.onlyInternalResistor = scripting.forceWrite(false);
 PWM1.ccp1PinConfig.passedPeripheralType = scripting.forceWrite("Digital");
 PWM1.ccp1PinConfig.$name                = "ti_driverlib_gpio_GPIOPinGeneric1";
 
+SYSCTL.validateClkStatus     = true;
 SYSCTL.forceDefaultClkConfig = true;
 SYSCTL.clockTreeEn           = true;
 
 TIMER1.$name              = "PID";
 TIMER1.timerMode          = "PERIODIC_UP";
 TIMER1.timerClkPrescale   = 100;
-TIMER1.interrupts         = ["LOAD"];
 TIMER1.timerStartTimer    = true;
 TIMER1.timerPeriod        = "10 ms";
+TIMER1.interrupts         = ["LOAD"];
 TIMER1.peripheral.$assign = "TIMA0";
 
 UART1.$name                            = "K230";
 UART1.targetBaudRate                   = 115200;
+UART1.enableFIFO                       = true;
+UART1.rxFifoThreshold                  = "DL_UART_RX_FIFO_LEVEL_ONE_ENTRY";
+UART1.enabledInterrupts                = ["RX"];
 UART1.peripheral.$assign               = "UART2";
 UART1.peripheral.rxPin.$assign         = "PB16";
 UART1.peripheral.txPin.$assign         = "PB15";
@@ -225,4 +232,3 @@ pinFunction4.peripheral.hfxOutPin.$suggestSolution = "PA6";
 Board.peripheral.$suggestSolution                  = "DEBUGSS";
 Board.peripheral.swclkPin.$suggestSolution         = "PA20";
 Board.peripheral.swdioPin.$suggestSolution         = "PA19";
-GPIO4.associatedPins[0].pin.$suggestSolution       = "PB13";

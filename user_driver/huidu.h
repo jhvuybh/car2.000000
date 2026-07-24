@@ -18,5 +18,9 @@
 
 void huidu_get_value();// 获取灰度模块的值，存储在huidu_value数组中
 uint8_t adjust_motor(void);// 调整电机速度，使小车沿着黑线行驶
+void huidu_set_tracking_enabled(uint8_t enabled);// 允许/屏蔽灰度对电机轮速的修改
+extern volatile uint8_t huidu_tracking_enabled;// CCS Watch调试量：1启用，0屏蔽
+uint8_t finish_line_detected(void);
+void finish_detector_reset(void);
 
 #endif
