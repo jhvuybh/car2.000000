@@ -1,7 +1,6 @@
 #include "huidu.h"
-#include "motor.h"
 #include "ti_msp_dl_config.h"
-uint8_t huidu_value[] = {0, 0, 0, 0, 0 ,0,0,0,};
+uint8_t huidu_value[] = {0, 0, 0, 0, 0, 0, 0, 0};
 volatile uint8_t huidu_tracking_enabled = 1U;
 
 void huidu_set_tracking_enabled(uint8_t enabled)
@@ -26,6 +25,44 @@ void huidu_get_value()
     huidu_value[6] = get_gpio_state(HUIDU_R3_PORT, HUIDU_R3_PIN);
     huidu_value[7] = get_gpio_state(HUIDU_R4_PORT, HUIDU_R4_PIN);
 }
+
+/*
+ * 返回最近一次灰度采样中左/右半边的黑线数量。
+ * adjust_motor()会先调用huidu_get_value()，因此主状态机应在调用
+ * adjust_motor()之后读取这两个结果。当前传感器约定0表示黑、1表示白。
+ */
+uint8_t huidu_get_left_black_count(void)
+{
+    uint8_t black_count = 0U;
+    uint8_t i;
+
+    for (i = 0U; i < 4U; i++)
+    {
+        if (huidu_value[i] == 0U)
+        {
+            black_count++;
+        }
+    }
+
+    return black_count;
+}
+
+uint8_t huidu_get_right_black_count(void)
+{
+    uint8_t black_count = 0U;
+    uint8_t i;
+
+    for (i = 4U; i < 8U; i++)
+    {
+        if (huidu_value[i] == 0U)
+        {
+            black_count++;
+        }
+    }
+
+    return black_count;
+}
+
 extern float target_speed_1;// 电机目标速度 mm/s
 extern float target_speed_2;// 电机目标速度 mm/s
  
@@ -66,8 +103,8 @@ uint8_t adjust_motor(void)    // 调整电机速度，使小车沿着黑线行�
     float correction;
 
     float base_speed = 437.5f;   // 基础速度，单位 mm/s
-    float trace_kp = 20.0f;     // 黑线偏离中心时的比例系数
-    float center_kp = 8.0f;    // 黑线接近中心时的比例系数
+    float trace_kp = 30.0f;     // 黑线偏离中心时的比例系数
+    float center_kp = 12.0f;    // 黑线接近中心时的比例系数
 
     /* 每次调用都重新读取8路灰度 */
     huidu_get_value();

@@ -33,11 +33,21 @@
 /* 病房和药房门口是黑色虚线：3~7路黑为终点；8路全黑专用于路口。 */
 #define FINISH_MIN_BLACK_COUNT           3U
 /* 转弯或直穿路口后的屏蔽时间，防止同一个路口被重复识别。 */
-#define ROUTE_GUARD_TIME_MS             600U
+#define ROUTE_GUARD_TIME_MS             0U
 /* 出发后先驶离起点虚线；到时且回到正常窄线后才允许识别第一个路口。 */
 #define START_GUARD_TIME_MS             1000U
 /* 行驶过程中周期性重发视觉任务命令，防止K230漏收一次命令。 */
 #define VISION_COMMAND_RETRY_MS         500U
+/*
+ * 最远端返程前两个直角弯不一定出现8路全黑，因此改用左右半边灰度图案判断：
+ * 预期转向一侧至少3路黑线，另一侧最多1路黑线，并连续满足3次才确认到弯。
+ */
+/* 预期转向一侧4个探头中，至少需要检测到3个黑色。 */
+#define RETURN_CORNER_SIDE_MIN_BLACK    3U
+/* 非转向一侧最多允许探头检测到黑色，防止把宽线误认为直角弯。 */
+#define RETURN_CORNER_OTHER_MAX_BLACK   3U
+/* 上述左右图案必须连续出现3次，过滤单次抖动和瞬时干扰。 */
+#define RETURN_CORNER_STABLE_SAMPLES    3U
 
 #define NEAR_CROSS_INDEX                1U
 #define MIDDLE_CROSS_INDEX              2U
@@ -219,6 +229,8 @@ int main(void)
     uint8_t start_guard_active = 0U;
     /* 置1表示已经转入具体病房，之后检测到黑白门线即可停车。 */
     uint8_t heading_to_room = 0U;
+    /* 最远端返程直角弯需要连续多次满足方向图案后才确认为路口。 */
+    uint8_t return_corner_stable_count = 0U;
     /* 接近路口时提前锁存的目标房号方向，以及该缓存是否有效。 */
     k230_side_t cached_route_side = K230_SIDE_CENTER;
     uint8_t cached_route_side_valid = 0U;
@@ -534,6 +546,7 @@ int main(void)
                     car_turn_around();
                     /* 返程从route[]最后一个动作开始读取。 */
                     return_route_index = route_length;
+                    return_corner_stable_count = 0U;
                     cross_locked = 1U;
 
                     car_forward();
@@ -546,6 +559,11 @@ int main(void)
 
             case MISSION_RETURN_TRACE:
             {
+                uint8_t return_route_detected;
+                uint8_t left_black_count;
+                uint8_t right_black_count;
+                RouteAction expected_return_action;
+
                 /* 阶段5：返程只使用路线栈和灰度循迹，不再读取K230结果。 */
                 black_count = adjust_motor();
 
@@ -567,6 +585,8 @@ int main(void)
 
                 if (route_guard_active)
                 {
+                    return_corner_stable_count = 0U;
+
                     if (black_count <= CROSS_CLEAR_BLACK_COUNT)
                     {
                         cross_locked = 0U;
@@ -582,10 +602,62 @@ int main(void)
                     break;
                 }
 
-                if (black_count == CROSS_BLACK_COUNT && !cross_locked)
+                /* 普通十字路口仍沿用8路全黑，避免降低全局路口阈值。 */
+                return_route_detected =
+                    (black_count == CROSS_BLACK_COUNT) ? 1U : 0U;
+
+                /*
+                 * 最远端路线有4个去程动作。返程索引4和3分别对应最远端
+                 * 病房弯和主路弯，这两个位置是直角线，不保证8路同时压黑。
+                 * 根据路线栈中的预期反向动作，只检查应转向一侧的4个探头；
+                 * 另一侧最多允许1路黑，并连续确认，减少普通宽弯误触发。
+                 */
+                if (!return_route_detected &&
+                    route_length == REMOTE_ROOM_CROSS_INDEX &&
+                    return_route_index >= REMOTE_MAIN_CROSS_INDEX)
+                {
+                    expected_return_action = route_reverse_action(
+                        route[return_route_index - 1U]
+                    );
+                    left_black_count = huidu_get_left_black_count();
+                    right_black_count = huidu_get_right_black_count();
+
+                    if ((expected_return_action == ROUTE_LEFT &&
+                         /* 预期左转：左侧至少3黑，右侧最多1黑。 */
+                         left_black_count >= RETURN_CORNER_SIDE_MIN_BLACK &&
+                         right_black_count <= RETURN_CORNER_OTHER_MAX_BLACK) ||
+                        (expected_return_action == ROUTE_RIGHT &&
+                         /* 预期右转：右侧至少3黑，左侧最多1黑。 */
+                         right_black_count >= RETURN_CORNER_SIDE_MIN_BLACK &&
+                         left_black_count <= RETURN_CORNER_OTHER_MAX_BLACK))
+                    {
+                        if (return_corner_stable_count <
+                            RETURN_CORNER_STABLE_SAMPLES)
+                        {
+                            return_corner_stable_count++;
+                        }
+                    }
+                    else
+                    {
+                        return_corner_stable_count = 0U;
+                    }
+
+                    if (return_corner_stable_count >=
+                        RETURN_CORNER_STABLE_SAMPLES)
+                    {
+                        return_route_detected = 1U;
+                    }
+                }
+                else
+                {
+                    return_corner_stable_count = 0U;
+                }
+
+                if (return_route_detected && !cross_locked)
                 {
                     /* 到达返程路口后，从路线尾部弹出一个动作并执行其反动作。 */
                     cross_locked = 1U;
+                    return_corner_stable_count = 0U;
                     car_stop();
 
                     if (return_route_index == 0U)
