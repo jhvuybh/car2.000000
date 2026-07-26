@@ -68,6 +68,21 @@ extern float target_speed_2;// 电机目标速度 mm/s
  
 float target_speed_5[] = {225, 375, 600, 1200, 1500};// 5档速度，单位 mm/s    
 
+/*
+ * 外层循迹PD参数，可在CCS Watch中在线观察和微调。
+ * 直道保持较高速度；黑线偏离中心越远，基础速度越低。
+ */
+volatile float trace_kp = 28.0f;
+volatile float trace_kd = 20.0f;
+volatile float trace_straight_speed = 650.0f;
+volatile float trace_min_speed = 400.0f;
+volatile float trace_slowdown = 35.0f;
+
+/* CCS Watch调试量 */
+volatile float trace_error = 0.0f;
+volatile float trace_correction = 0.0f;
+volatile float trace_base_speed = 0.0f;
+
 
 // 限制目标速度范围
 static float limit_target_speed(float speed)
@@ -100,11 +115,10 @@ uint8_t adjust_motor(void)    // 调整电机速度，使小车沿着黑线行�
     uint8_t i;
 
     float error;
+    float error_change;
+    float abs_error;
     float correction;
-
-    float base_speed = 437.5f;   // 基础速度，单位 mm/s
-    float trace_kp = 30.0f;     // 黑线偏离中心时的比例系数
-    float center_kp = 12.0f;    // 黑线接近中心时的比例系数
+    float base_speed;
 
     /* 每次调用都重新读取8路灰度 */
     huidu_get_value();
@@ -159,17 +173,28 @@ uint8_t adjust_motor(void)    // 调整电机速度，使小车沿着黑线行�
 
     /* 计算黑线位置 */
     error = (float)weighted_sum / black_count;// 计算黑线位置误差，负数表示黑线在左侧，正数表示黑线在右侧
-    last_error = error;                      // 保存当前误差，用于丢线时判断黑线在左侧还是右侧 
+    error_change = error - last_error;
 
-    /* 中央附近使用较小修正，防止左右反复摆动 */
-    if (error >= -1.0f && error <= 1.0f)
+    /*
+     * 连续PD循迹：
+     * P项根据当前位置纠偏，D项抑制越过中心后的左右摆动。
+     * 不再在中心附近切换增益，避免修正量突然跳变。
+     */
+    correction = trace_kp * error + trace_kd * error_change;
+
+    /* 直道高速、弯道降速，兼顾20秒完赛和弯道稳定性。 */
+    abs_error = (error >= 0.0f) ? error : -error;
+    base_speed = trace_straight_speed - trace_slowdown * abs_error;
+    if (base_speed < trace_min_speed)
     {
-        correction = center_kp * error;
+        base_speed = trace_min_speed;
     }
-    else
-    {
-        correction = trace_kp * error;
-    }     
+
+    /* 保存调试量，并在本次计算完成后更新历史误差。 */
+    trace_error = error;
+    trace_correction = correction;
+    trace_base_speed = base_speed;
+    last_error = error;
 
     /*
      * 黑线在左侧：左轮减速，右轮加速。

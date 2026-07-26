@@ -32,8 +32,6 @@
 #define CROSS_CLEAR_BLACK_COUNT         2U
 /* 病房和药房门口是黑色虚线：3~7路黑为终点；8路全黑专用于路口。 */
 #define FINISH_MIN_BLACK_COUNT           3U
-/* 转弯或直穿路口后的屏蔽时间，防止同一个路口被重复识别。 */
-#define ROUTE_GUARD_TIME_MS             0U
 /* 出发后先驶离起点虚线；到时且回到正常窄线后才允许识别第一个路口。 */
 #define START_GUARD_TIME_MS             1000U
 /* 行驶过程中周期性重发视觉任务命令，防止K230漏收一次命令。 */
@@ -143,6 +141,8 @@ static void route_execute_action(RouteAction action)
 
     /* 直行无需额外动作；转向函数结束后也必须重新给出前进速度。 */
     car_forward();
+    /* 固定动作结束后立即恢复灰度循迹，由cross_locked防止重复识别路口。 */
+    huidu_set_tracking_enabled(1U);
 }
 
 /* 把K230给出的画面左/右位置转换成小车的左/右转动作。 */
@@ -223,8 +223,6 @@ int main(void)
     uint8_t black_count = 0U;
     /* 路口锁：进入路口置1，完全离开路口后清0，防止重复计数。 */
     uint8_t cross_locked = 0U;
-    /* 转弯后短时间只循迹、不判断新路口。 */
-    uint8_t route_guard_active = 0U;
     /* 起点虚线保护：置1时只循迹，不把起点标记计为路口。 */
     uint8_t start_guard_active = 0U;
     /* 置1表示已经转入具体病房，之后检测到黑白门线即可停车。 */
@@ -235,8 +233,7 @@ int main(void)
     k230_side_t cached_route_side = K230_SIDE_CENTER;
     uint8_t cached_route_side_valid = 0U;
 
-    /* 以下两个变量分别记录路口保护和视觉命令重发的起始时刻。 */
-    uint32_t route_guard_start = 0U;
+    /* 以下变量分别记录起点保护和视觉命令重发的起始时刻。 */
     uint32_t start_guard_start = 0U;
     uint32_t vision_command_time = 0U;
 
@@ -317,7 +314,6 @@ int main(void)
                     return_route_index = 0U;
                     outward_cross_index = 0U;
                     cross_locked = 0U;
-                    route_guard_active = 0U;
                     huidu_set_tracking_enabled(1U);
                     start_guard_active = 1U;
                     start_guard_start = SystemTime_GetMs();
@@ -381,7 +377,6 @@ int main(void)
                  * 才把“至少3路灰度检测到黑色”的虚线判断为病房终点。
                  */
                 if (heading_to_room &&
-                    !route_guard_active &&
                     !cross_locked &&
                     black_count >= FINISH_MIN_BLACK_COUNT &&
                     black_count < CROSS_BLACK_COUNT)
@@ -390,27 +385,6 @@ int main(void)
                     /* 赛题要求亮红灯；本车没有红灯，因此用蓝灯代替。 */
                     LED_ON(LED_BLUE_ID);
                     mission_state = MISSION_WAIT_UNLOAD;
-                    break;
-                }
-
-                if (route_guard_active)
-                {
-                    /*
-                     * 刚执行完路口动作时仍可能压在大片黑线上：继续循迹，
-                     * 但暂时不允许outward_cross_index再次增加。
-                     */
-                    if (black_count <= CROSS_CLEAR_BLACK_COUNT)
-                    {
-                        cross_locked = 0U;
-                    }
-
-                    if (SystemTime_IsOver(
-                            route_guard_start,
-                            ROUTE_GUARD_TIME_MS))
-                    {
-                        route_guard_active = 0U;
-                        huidu_set_tracking_enabled(1U);
-                    }
                     break;
                 }
 
@@ -454,8 +428,6 @@ int main(void)
                         cached_route_side = K230_SIDE_CENTER;
                         cached_route_side_valid = 0U;
                         k230_discard_pending_results();
-                        route_guard_start = SystemTime_GetMs();
-                        route_guard_active = 1U;
                     }
                     else if (outward_cross_index == MIDDLE_CROSS_INDEX)
                     {
@@ -483,8 +455,6 @@ int main(void)
                         cached_route_side = K230_SIDE_CENTER;
                         cached_route_side_valid = 0U;
                         k230_discard_pending_results();
-                        route_guard_start = SystemTime_GetMs();
-                        route_guard_active = 1U;
                     }
                     else if (outward_cross_index == REMOTE_MAIN_CROSS_INDEX ||
                              outward_cross_index == REMOTE_ROOM_CROSS_INDEX)
@@ -516,8 +486,6 @@ int main(void)
                         cached_route_side = K230_SIDE_CENTER;
                         cached_route_side_valid = 0U;
                         k230_discard_pending_results();
-                        route_guard_start = SystemTime_GetMs();
-                        route_guard_active = 1U;
                     }
                     else
                     {
@@ -550,8 +518,7 @@ int main(void)
                     cross_locked = 1U;
 
                     car_forward();
-                    route_guard_start = SystemTime_GetMs();
-                    route_guard_active = 1U;
+                    huidu_set_tracking_enabled(1U);
                     mission_state = MISSION_RETURN_TRACE;
                 }
                 break;
@@ -572,7 +539,6 @@ int main(void)
                  * 至少3路灰度检测到黑色即认为到达药房门口虚线。
                  */
                 if (return_route_index == 0U &&
-                    !route_guard_active &&
                     !cross_locked &&
                     black_count >= FINISH_MIN_BLACK_COUNT &&
                     black_count < CROSS_BLACK_COUNT)
@@ -580,25 +546,6 @@ int main(void)
                     car_stop();
                     LED_ON(LED_GREEN_ID);
                     mission_state = MISSION_FINISHED;
-                    break;
-                }
-
-                if (route_guard_active)
-                {
-                    return_corner_stable_count = 0U;
-
-                    if (black_count <= CROSS_CLEAR_BLACK_COUNT)
-                    {
-                        cross_locked = 0U;
-                    }
-
-                    if (SystemTime_IsOver(
-                            route_guard_start,
-                            ROUTE_GUARD_TIME_MS))
-                    {
-                        route_guard_active = 0U;
-                        huidu_set_tracking_enabled(1U);
-                    }
                     break;
                 }
 
@@ -670,8 +617,6 @@ int main(void)
                     action = route_reverse_action(route[return_route_index]);
                     route_execute_action(action);
 
-                    route_guard_start = SystemTime_GetMs();
-                    route_guard_active = 1U;
                 }
                 else if (black_count <= CROSS_CLEAR_BLACK_COUNT)
                 {

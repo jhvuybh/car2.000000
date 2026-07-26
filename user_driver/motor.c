@@ -6,8 +6,8 @@
 //转弯参数
 #define CROSS_FORWARD_SPEED   300.0f    // 检测到十字路口后，继续向前行驶的速度
 #define TURN_90_SPEED         300.0f   // 90度转弯速度
-#define CROSS_CENTER_TIME_MS  850U //继续行驶时间
-#define TURN_90_TIME_MS       750U //转弯时间
+#define CROSS_CENTER_TIME_MS  800U //继续行驶时间
+#define TURN_90_TIME_MS       870U //转弯时间
 
 //设置掉头参数
 #define TURN_AROUND_TIME_MS    2050U //掉头时间
