@@ -38,7 +38,8 @@
 #define VISION_COMMAND_RETRY_MS         500U
 /*
  * 最远端返程前两个直角弯不一定出现8路全黑，因此改用左右半边灰度图案判断：
- * 预期转向一侧至少3路黑线，另一侧最多1路黑线，并连续满足3次才确认到弯。
+ * 预期转向一侧至少3路黑线，另一侧黑线数不超过下方配置值，
+ * 并连续满足3次才确认到弯。
  */
 /* 预期转向一侧4个探头中，至少需要检测到3个黑色。 */
 #define RETURN_CORNER_SIDE_MIN_BLACK    3U
@@ -46,6 +47,17 @@
 #define RETURN_CORNER_OTHER_MAX_BLACK   3U
 /* 上述左右图案必须连续出现3次，过滤单次抖动和瞬时干扰。 */
 #define RETURN_CORNER_STABLE_SAMPLES    3U
+
+/*
+ * 最远端病房返程的两个T字路口使用编码器距离窗口过滤地面房号。
+ * 实测：掉头后至第一个路口约550mm，第一个转弯后至第二个路口约900mm。
+ * 只有灰度探头进入对应窗口后，才允许用左右半边图案触发转向。
+ * 实车应以“灰度探头压到T字横线时”的里程为准微调这些参数。
+ */
+#define RETURN_FIRST_CORNER_MIN_MM       155.0f
+#define RETURN_FIRST_CORNER_MAX_MM       200.0f
+#define RETURN_SECOND_CORNER_MIN_MM      630.0f
+#define RETURN_SECOND_CORNER_MAX_MM     700.0f
 
 #define NEAR_CROSS_INDEX                1U
 #define MIDDLE_CROSS_INDEX              2U
@@ -91,6 +103,9 @@ static uint8_t return_route_index = 0U;
  * CCS Watch中观察；它仍只由main状态机在收到完整有效的K230结果帧后更新。
  */
 volatile uint8_t target_room = 0U;
+
+/* CCS Watch调试量：当前返程直行段从上一次清零起累计的平均轮距，单位mm。 */
+volatile float return_segment_distance_mm = 0.0f;
 
 /* 将一次去程动作保存到路线数组；数组已满时返回false。 */
 static bool route_push(RouteAction action)
@@ -518,6 +533,9 @@ int main(void)
                     cross_locked = 1U;
 
                     car_forward();
+                    /* 掉头产生的编码器脉冲不属于第一段返程距离，从这里重新计程。 */
+                    motor_odometer_reset();
+                    return_segment_distance_mm = 0.0f;
                     huidu_set_tracking_enabled(1U);
                     mission_state = MISSION_RETURN_TRACE;
                 }
@@ -529,10 +547,12 @@ int main(void)
                 uint8_t return_route_detected;
                 uint8_t left_black_count;
                 uint8_t right_black_count;
+                uint8_t return_corner_in_distance_window;
                 RouteAction expected_return_action;
 
                 /* 阶段5：返程只使用路线栈和灰度循迹，不再读取K230结果。 */
                 black_count = adjust_motor();
+                return_segment_distance_mm = motor_odometer_get_mm();
 
                 /*
                  * 所有去程路口都已反向通过、路口保护已经结束后，
@@ -563,20 +583,43 @@ int main(void)
                     route_length == REMOTE_ROOM_CROSS_INDEX &&
                     return_route_index >= REMOTE_MAIN_CROSS_INDEX)
                 {
+                    /*
+                     * return_route_index=4：从最远端病房返回后遇到的第一个T口；
+                     * return_route_index=3：第一个T口转完后遇到的第二个T口。
+                     * 距离窗口外的侧边黑块来自房号时，只参与正常循迹，不触发转向。
+                     */
+                    if (return_route_index == REMOTE_ROOM_CROSS_INDEX)
+                    {
+                        return_corner_in_distance_window =
+                            (return_segment_distance_mm >=
+                                 RETURN_FIRST_CORNER_MIN_MM &&
+                             return_segment_distance_mm <=
+                                 RETURN_FIRST_CORNER_MAX_MM) ? 1U : 0U;
+                    }
+                    else
+                    {
+                        return_corner_in_distance_window =
+                            (return_segment_distance_mm >=
+                                 RETURN_SECOND_CORNER_MIN_MM &&
+                             return_segment_distance_mm <=
+                                 RETURN_SECOND_CORNER_MAX_MM) ? 1U : 0U;
+                    }
+
                     expected_return_action = route_reverse_action(
                         route[return_route_index - 1U]
                     );
                     left_black_count = huidu_get_left_black_count();
                     right_black_count = huidu_get_right_black_count();
 
-                    if ((expected_return_action == ROUTE_LEFT &&
-                         /* 预期左转：左侧至少3黑，右侧最多1黑。 */
+                    if (return_corner_in_distance_window &&
+                        ((expected_return_action == ROUTE_LEFT &&
+                         /* 预期左转：左侧至少3黑，右侧不超过配置上限。 */
                          left_black_count >= RETURN_CORNER_SIDE_MIN_BLACK &&
                          right_black_count <= RETURN_CORNER_OTHER_MAX_BLACK) ||
                         (expected_return_action == ROUTE_RIGHT &&
-                         /* 预期右转：右侧至少3黑，左侧最多1黑。 */
+                         /* 预期右转：右侧至少3黑，左侧不超过配置上限。 */
                          right_black_count >= RETURN_CORNER_SIDE_MIN_BLACK &&
-                         left_black_count <= RETURN_CORNER_OTHER_MAX_BLACK))
+                         left_black_count <= RETURN_CORNER_OTHER_MAX_BLACK)))
                     {
                         if (return_corner_stable_count <
                             RETURN_CORNER_STABLE_SAMPLES)
@@ -616,6 +659,13 @@ int main(void)
                     return_route_index--;
                     action = route_reverse_action(route[return_route_index]);
                     route_execute_action(action);
+
+                    /*
+                     * 固定转弯动作中的前进和旋转脉冲不能计入下一段直线路程。
+                     * 转弯完成后清零，使第二个T口重新以0mm为起点测距。
+                     */
+                    motor_odometer_reset();
+                    return_segment_distance_mm = 0.0f;
 
                 }
                 else if (black_count <= CROSS_CLEAR_BLACK_COUNT)

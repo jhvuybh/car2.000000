@@ -36,5 +36,12 @@ void car_turn_around(void);// 小车掉头
 void car_turn_left_90(void);// 小车左转90度
 void car_turn_right_90(void);// 小车右转90度
 
+/*
+ * 编码器里程计：累计左右轮行程的平均值，单位为mm。
+ * 每通过一个返程路口后调用reset，使下一段路程从0开始计算。
+ */
+void motor_odometer_reset(void);
+float motor_odometer_get_mm(void);
+
 
 #endif // MOTOR_H
