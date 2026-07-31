@@ -23,6 +23,11 @@ uint8_t huidu_get_right_black_count(void);// 最近一次采样中右侧R1~R4的
 void huidu_set_tracking_enabled(uint8_t enabled);// 允许/屏蔽灰度对电机轮速的修改
 extern volatile uint8_t huidu_tracking_enabled;// CCS Watch调试量：1启用，0屏蔽
 uint8_t finish_line_detected(void);
+/* 任务2/4启动时开启软启动；停车或切换任务时取消。 */
+void huidu_soft_start_begin(void);
+void huidu_soft_start_cancel(void);
+/* 设置临时基础速度上限；传入0可取消限制。 */
+void huidu_set_runtime_speed_cap(float speed_mm_s);
 void finish_detector_reset(void);
 
 #endif

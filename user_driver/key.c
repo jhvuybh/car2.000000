@@ -60,8 +60,69 @@ uint8_t medicine_is_loaded(void)
 }
 
 
+/* 读取KEY1状态（内部上拉，低电平=按下，硬件已消抖） */
+uint8_t key1_is_pressed(void)
+{
+    return ((DL_GPIO_readPins(KEY1_PORT, KEY1_PIN_PIN) & KEY1_PIN_PIN) == 0) ? 1 : 0;
+}
+
+/* 读取KEY2状态（内部上拉，低电平=按下，硬件已消抖） */
+uint8_t key2_is_pressed(void)
+{
+    return ((DL_GPIO_readPins(KEY2_PORT, KEY2_PIN_PIN) & KEY2_PIN_PIN) == 0) ? 1 : 0;
+}
+
+/* 读取KEY3状态（内部上拉，低电平=按下，硬件已消抖） */
+uint8_t key3_is_pressed(void)
+{
+    return ((DL_GPIO_readPins(KEY3_PORT, KEY3_PIN_PIN) & KEY3_PIN_PIN) == 0) ? 1 : 0;
+}
+
+/* 读取KEY4状态（内部上拉，低电平=按下，硬件已消抖） */
+uint8_t key4_is_pressed(void)
+{
+    return ((DL_GPIO_readPins(KEY4_PORT, KEY4_PIN_PIN) & KEY4_PIN_PIN) == 0) ? 1 : 0;
+}
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+//电机编码器中断
 uint32_t counter_1_A = 0;// 计数器1A
 uint32_t counter_2_A = 0;// 计数器2A
 

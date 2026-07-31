@@ -1,0 +1,37 @@
+/*
+ * Copy the relevant calls into main.c for the first hardware test.
+ * Do not add this file to the build together with the existing main.c.
+ */
+
+#include "ti_msp_dl_config.h"
+#include "delay.h"
+#include "user_driver/zdt_stepper.h"
+
+int main(void)
+{
+    /* 初始化empty.syscfg中配置的GPIO、定时器和UART。 */
+    SYSCFG_DL_init();
+    /* 初始化电机UART接收中断；此函数本身不会让电机转动。 */
+    zdt_stepper_init();
+
+    /* 等待闭环驱动器完成上电自检。 */
+    delay_ms(1000);
+    /* 使能地址1的电机。 */
+    zdt_stepper_enable(true);
+    delay_ms(100);
+
+    /*
+     * 安全初始参数：60 RPM、加速度20、160脉冲。
+     * 默认16细分时3200脉冲/圈，因此160脉冲=0.05圈。
+     * 这些只是首次空载测试值，不是最终平衡参数。
+     */
+    zdt_stepper_move_relative(160, 60, 20);
+    delay_ms(1500);
+    /* 使用相同速度和位移反向返回。 */
+    zdt_stepper_move_relative(-160, 60, 20);
+
+    while (1) {
+        /* 持续解析电机返回的位置、转速和状态，不能删掉。 */
+        zdt_stepper_poll();
+    }
+}

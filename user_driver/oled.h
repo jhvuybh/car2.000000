@@ -5,12 +5,18 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+/* 7-bit address; most four-pin SSD1306/SH1106 modules use 0x3C. */
+#define OLED_I2C_ADDRESS  0x3CU
+
 // ---------------------------------------------------------
 #define OLED_CMD  0	//写命令
 #define OLED_DATA 1	//写数据
 
 typedef unsigned char u8;
 typedef unsigned int  u32;
+
+/* OLED I2C automatic recovery count (for debugging in CCS). */
+extern volatile uint32_t oled_i2c_error_count;
 
 /**
  * @brief 清除 OLED 显存中的一个像素点
@@ -135,6 +141,13 @@ void OLED_DisPlay_Off(void);
  *       屏幕上的显示才会真正更新。
  */
 void OLED_Refresh(void);
+
+/*
+ * Refresh only a rectangular pixel region from OLED_GRAM.
+ * Coordinates use [x_start, x_end) and [y_start, y_end).  Updating only the
+ * timer line avoids a full 128x64 I2C transfer disturbing line tracking.
+ */
+void OLED_RefreshArea(u8 x_start, u8 y_start, u8 x_end, u8 y_end);
 
 /**
  * @brief 清空 OLED 显存并刷新到屏幕

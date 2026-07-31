@@ -1,7 +1,7 @@
 #include "motor.h"
 #include "system_time.h"
 
-#define PWM_MAX_DUTY      6000// 最大占空比/10000
+#define PWM_MAX_DUTY      8000// 最大占空比/10000
 
 //转弯参数
 #define CROSS_FORWARD_SPEED   300.0f    // 检测到十字路口后，继续向前行驶的速度
@@ -269,11 +269,23 @@ extern uint32_t counter_2_A;
 float speed_2 = 0;
 
 /*
+ * 编码器测速低通滤波系数（后续可调范围0.15~0.40）：
+ *   数值越小，电机越平顺，但速度反馈延迟越大；
+ *   数值越大，响应越快，但低速脉冲量化造成的“一冲一冲”更明显。
+ * 当前PID周期为10ms、编码器每周期脉冲较少，建议先使用0.25。
+ * 这里只滤波速度反馈，里程仍累计原始脉冲，不影响停车距离精度。
+ */
+volatile float motor_speed_filter_alpha = 0.20f;   //响应速度慢调高,顿挫调低
+volatile float motor_raw_speed_1 = 0.0f; /* CCS Watch：左轮未滤波速度 */
+volatile float motor_raw_speed_2 = 0.0f; /* CCS Watch：右轮未滤波速度 */
+
+/*
  * 左右轮编码器脉冲总和。
  * PID中断每次读取瞬时脉冲前先累加到这里；除以2后就是两轮平均脉冲数。
  * 返程只在直行段读取该里程，因此原地转弯结束后必须由主状态机清零。
  */
 static volatile uint32_t odometer_pulse_sum = 0U;
+static volatile uint8_t odometer_enabled = 0U;
 
 void motor_odometer_reset(void)
 {
@@ -281,6 +293,11 @@ void motor_odometer_reset(void)
     /* 同时丢弃距离清零前、尚未来得及被PID中断读取的零散脉冲。 */
     counter_1_A = 0U;
     counter_2_A = 0U;
+}
+
+void motor_odometer_set_enabled(uint8_t enabled)
+{
+    odometer_enabled = (enabled != 0U) ? 1U : 0U;
 }
 
 float motor_odometer_get_mm(void)
@@ -294,16 +311,33 @@ float motor_odometer_get_mm(void)
 // 计算电机速度
 void calculate_speed(uint8_t motor_id)
 {
+    float alpha = motor_speed_filter_alpha;
+
+    /* 防止调试时输入非法系数。 */
+    if (alpha < 0.01f) {
+        alpha = 0.01f;
+    } else if (alpha > 1.0f) {
+        alpha = 1.0f;
+    }
+
     if (motor_id == 1) {
         /* 保存本周期左轮脉冲，随后瞬时测速计数器会清零。 */
-        odometer_pulse_sum += counter_1_A;
-        speed_1 = (float)counter_1_A / MOTOR_BIANMAQI * PI * MOTOR_WHEEL_D * 100; // 轮速 mm/s
+        if (odometer_enabled != 0U) {
+            odometer_pulse_sum += counter_1_A;
+        }
+        motor_raw_speed_1 = (float)counter_1_A / MOTOR_BIANMAQI *
+                            PI * MOTOR_WHEEL_D * 100.0f;
+        speed_1 += alpha * (motor_raw_speed_1 - speed_1);
         counter_1_A = 0; // 计算完速度后清零计数器
     }
     if (motor_id == 2) {
         /* 保存本周期右轮脉冲；里程函数最终取左右轮平均值。 */
-        odometer_pulse_sum += counter_2_A;
-        speed_2 = (float)counter_2_A / MOTOR_BIANMAQI * PI * MOTOR_WHEEL_D * 100; // 轮速 mm/s
+        if (odometer_enabled != 0U) {
+            odometer_pulse_sum += counter_2_A;
+        }
+        motor_raw_speed_2 = (float)counter_2_A / MOTOR_BIANMAQI *
+                            PI * MOTOR_WHEEL_D * 100.0f;
+        speed_2 += alpha * (motor_raw_speed_2 - speed_2);
         counter_2_A = 0; // 计算完速度后清零计数器
     }
 }

@@ -1,0 +1,44 @@
+/*
+ * 题目整圈停车示例。把调用加入你实际任务状态机，不要与现有main.c同时编译。
+ *
+ * 赛道顺时针行驶：BC半圆约右转180度，DA半圆再右转180度，
+ * 带符号累计偏航角约为+360度。
+ */
+
+#include "user_driver/gyro_angle_stop.h"
+#include "user_driver/motor.h"
+
+static uint8_t lap_started = 0U;
+
+void full_lap_task_update(void)
+{
+    if (lap_started == 0U) {
+        /* 必须先确认HWT101右转时delta为正；若相反修改方向宏。 */
+        /* 内部同时清零里程，并设置360度+最小里程联合条件。 */
+        if (gyro_lap_stop_start() != 0U) {
+            lap_started = 1U;
+            car_forward();
+        }
+        return;
+    }
+
+    switch (gyro_angle_stop_update()) {
+        case GYRO_ANGLE_STOP_RUNNING:
+            /* 此处继续调用原有灰度循迹函数。 */
+            adjust_motor();
+            break;
+
+        case GYRO_ANGLE_STOP_REACHED:
+            /* 已自动停车，任务完成。 */
+            lap_started = 0U;
+            break;
+
+        case GYRO_ANGLE_STOP_SENSOR_LOST:
+            /* 已安全停车；显示或LED提示传感器故障。 */
+            lap_started = 0U;
+            break;
+
+        default:
+            break;
+    }
+}

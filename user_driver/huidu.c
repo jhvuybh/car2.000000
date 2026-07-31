@@ -1,5 +1,6 @@
 #include "huidu.h"
 #include "ti_msp_dl_config.h"
+#include "system_time.h"
 uint8_t huidu_value[] = {0, 0, 0, 0, 0, 0, 0, 0};
 volatile uint8_t huidu_tracking_enabled = 1U;
 
@@ -65,23 +66,107 @@ uint8_t huidu_get_right_black_count(void)
 
 extern float target_speed_1;// 电机目标速度 mm/s
 extern float target_speed_2;// 电机目标速度 mm/s
- 
-float target_speed_5[] = {225, 375, 600, 1200, 1500};// 5档速度，单位 mm/s    
+
+float target_speed_5[] = {125, 200, 250, 300, 450};// 5档速度，单位 mm/s    
 
 /*
  * 外层循迹PD参数，可在CCS Watch中在线观察和微调。
  * 直道保持较高速度；黑线偏离中心越远，基础速度越低。
+ */ 
+volatile float trace_kp = 8.0f;                 // 循迹转向力度
+volatile float trace_kd = 0.01f;               // 弯道微分修正；过大会造成左右轮速度来回跳变
+volatile float trace_straight_speed = 450.0f; // 直线速度 mm/s  
+volatile float trace_min_speed = 350.0f;   //转弯最小速度
+volatile float trace_slowdown = 35.0f; // 偏离中心时的减速量
+
+/*
+ * 完全丢线时的搜索速度（后续调弯道主要修改这里）：
+ * slow是靠近丢线方向的内侧轮，fast是外侧轮。
+ * 原来的300/800差速过大，重新找到线时会产生明显顿挫。
  */
-volatile float trace_kp = 28.0f;
-volatile float trace_kd = 20.0f;
-volatile float trace_straight_speed = 650.0f;
-volatile float trace_min_speed = 400.0f;
-volatile float trace_slowdown = 35.0f;
+volatile float trace_lost_slow_speed = 150.0f;
+volatile float trace_lost_fast_speed = 350.0f;
 
 /* CCS Watch调试量 */
 volatile float trace_error = 0.0f;
 volatile float trace_correction = 0.0f;
 volatile float trace_base_speed = 0.0f;
+
+/*
+ * 循迹软启动参数（后续主要修改这里）：
+ * trace_soft_start_speed：按键启动瞬间的基础速度，单位mm/s。
+ *   小球仍明显向后滚时可从80降到60；起步太慢可提高到100。
+ * trace_soft_start_accel：每秒增加的基础速度，单位mm/s^2。
+ *   数值越小越柔和，建议范围200~500。
+ *   当前从80加速到400约需要(400-80)/300=1.07秒。
+ *
+ * 软启动只限制基础前进速度，不取消左右轮PD差速修正，
+ * 因此起步阶段仍能沿黑线转向。
+ */
+volatile float trace_soft_start_speed = 80.0f;     //起步速度
+volatile float trace_soft_start_accel = 200.0f;   //起步加速度
+
+/* CCS Watch调试量：当前软启动允许的最大基础速度。 */
+volatile float trace_soft_start_limit = 0.0f;
+static uint32_t trace_soft_start_begin_ms = 0U;
+static uint8_t trace_soft_start_active = 0U;
+
+/*
+ * 运行时基础速度上限：0表示不限制。
+ * 任务2进入终点低速区后会临时设置为较低速度，下一次启动时清零。
+ */
+volatile float trace_runtime_speed_cap = 0.0f;
+
+void huidu_set_runtime_speed_cap(float speed_mm_s)
+{
+    trace_runtime_speed_cap = (speed_mm_s > 0.0f) ? speed_mm_s : 0.0f;
+}
+
+void huidu_soft_start_begin(void)
+{
+    trace_soft_start_begin_ms = SystemTime_GetMs();
+    trace_soft_start_limit = trace_soft_start_speed;
+    trace_soft_start_active = 1U;
+}
+
+void huidu_soft_start_cancel(void)
+{
+    trace_soft_start_active = 0U;
+    trace_soft_start_limit = trace_straight_speed;
+}
+
+/* 按真实经过时间计算速度上限，不依赖主循环执行频率。 */
+static float huidu_apply_soft_start(float requested_speed)
+{
+    float elapsed_s;
+    float allowed_speed;
+
+    if (trace_soft_start_active == 0U) {
+        trace_soft_start_limit = trace_straight_speed;
+        return requested_speed;
+    }
+
+    if (trace_soft_start_accel <= 0.0f) {
+        /* 非法加速度时取消软启动，避免车辆一直保持起步低速。 */
+        huidu_soft_start_cancel();
+        return requested_speed;
+    }
+
+    elapsed_s = (float)(SystemTime_GetMs() - trace_soft_start_begin_ms) /
+                1000.0f;
+    allowed_speed = trace_soft_start_speed + trace_soft_start_accel * elapsed_s;
+
+    if (allowed_speed >= trace_straight_speed) {
+        allowed_speed = trace_straight_speed;
+        trace_soft_start_active = 0U;
+    }
+    if (allowed_speed < 0.0f) {
+        allowed_speed = 0.0f;
+    }
+
+    trace_soft_start_limit = allowed_speed;
+    return (requested_speed > allowed_speed) ? allowed_speed : requested_speed;
+}
 
 
 // 限制目标速度范围
@@ -158,14 +243,14 @@ uint8_t adjust_motor(void)    // 调整电机速度，使小车沿着黑线行�
         if (last_error < -0.5f)
         {
             /* 上一次黑线在左侧，继续向左寻找 */
-            target_speed_1 = target_speed_5[0];
-            target_speed_2 = target_speed_5[3];
+            target_speed_1 = trace_lost_slow_speed;
+            target_speed_2 = trace_lost_fast_speed;
         }
         else if (last_error > 0.5f)
         {
             /* 上一次黑线在右侧，继续向右寻找 */
-            target_speed_1 = target_speed_5[3];
-            target_speed_2 = target_speed_5[0];
+            target_speed_1 = trace_lost_fast_speed;
+            target_speed_2 = trace_lost_slow_speed;
         }
 
         return 0;
@@ -188,6 +273,15 @@ uint8_t adjust_motor(void)    // 调整电机速度，使小车沿着黑线行�
     if (base_speed < trace_min_speed)
     {
         base_speed = trace_min_speed;
+    }
+
+    /* 起步阶段逐步放开基础速度，减小钢球因车体加速而向后滚动。 */
+    base_speed = huidu_apply_soft_start(base_speed);
+
+    /* 任务2末段低速接近终点，减小停车惯性及停车位置离散。 */
+    if (trace_runtime_speed_cap > 0.0f &&
+        base_speed > trace_runtime_speed_cap) {
+        base_speed = trace_runtime_speed_cap;
     }
 
     /* 保存调试量，并在本次计算完成后更新历史误差。 */

@@ -5,6 +5,77 @@
 u8 OLED_GRAM[144][8];
 extern void delay_ms(uint32_t ms);
 
+/* A missing or miswired OLED must never freeze key scanning or car control. */
+#define OLED_I2C_WAIT_LIMIT  200000U
+#define OLED_I2C_RETRY_COUNT 2U
+
+/* Number of automatic I2C recoveries; useful in CCS Expressions. */
+volatile uint32_t oled_i2c_error_count = 0U;
+
+static void OLED_I2C_Recover(void)
+{
+    oled_i2c_error_count++;
+    DL_I2C_disableController(OLED_INST);
+    DL_I2C_resetControllerTransfer(OLED_INST);
+    DL_I2C_flushControllerTXFIFO(OLED_INST);
+    DL_I2C_flushControllerRXFIFO(OLED_INST);
+    SYSCFG_DL_OLED_init();
+}
+
+/* Perform one two-byte SSD1306 transaction. */
+static uint8_t OLED_I2C_WriteOnce(uint8_t dat, uint8_t mode)
+{
+    uint8_t txData[2];
+    uint32_t wait_count;
+    uint32_t status;
+
+    txData[0] = mode ? 0x40U : 0x00U;
+    txData[1] = dat;
+
+    wait_count = OLED_I2C_WAIT_LIMIT;
+    while ((DL_I2C_getControllerStatus(OLED_INST) &
+            DL_I2C_CONTROLLER_STATUS_IDLE) == 0U) {
+        if (--wait_count == 0U) {
+            return 0U;
+        }
+    }
+
+    DL_I2C_fillControllerTXFIFO(OLED_INST, txData, 2U);
+    DL_I2C_startControllerTransfer(OLED_INST,
+                                   OLED_I2C_ADDRESS,
+                                   DL_I2C_CONTROLLER_DIRECTION_TX,
+                                   2U);
+
+    /* Confirm START, then wait for STOP/IDLE. */
+    wait_count = OLED_I2C_WAIT_LIMIT;
+    do {
+        status = DL_I2C_getControllerStatus(OLED_INST);
+        if ((status & DL_I2C_CONTROLLER_STATUS_ERROR) != 0U) {
+            return 0U;
+        }
+        if ((status & DL_I2C_CONTROLLER_STATUS_BUSY_BUS) != 0U) {
+            break;
+        }
+    } while (--wait_count != 0U);
+
+    if (wait_count == 0U) {
+        return 0U;
+    }
+
+    wait_count = OLED_I2C_WAIT_LIMIT;
+    do {
+        status = DL_I2C_getControllerStatus(OLED_INST);
+        if ((status & DL_I2C_CONTROLLER_STATUS_ERROR) != 0U) {
+            return 0U;
+        }
+        if ((status & DL_I2C_CONTROLLER_STATUS_IDLE) != 0U) {
+            return 1U;
+        }
+    } while (--wait_count != 0U);
+
+    return 0U;
+}
+
 //反显函数
 void OLED_ColorTurn(u8 i)
 {
@@ -29,26 +100,78 @@ void OLED_DisplayTurn(u8 i)
 
 void OLED_WR_Byte(uint8_t dat, uint8_t mode)
 {
-    uint8_t txData[2];
+    uint8_t attempt;
+
+    for (attempt = 0U; attempt < OLED_I2C_RETRY_COUNT; attempt++) {
+        if (OLED_I2C_WriteOnce(dat, mode) != 0U) {
+            return;
+        }
+        OLED_I2C_Recover();
+    }
+
+    /* Drop only this byte. A later refresh will try again. */
+    return;
+#if 0
     
     // 控制字节: 0x00为命令, 0x40为数据
     txData[0] = mode ? 0x40 : 0x00; 
     txData[1] = dat;
 
     // 1. 等待 I2C 彻底空闲
-    while (!(DL_I2C_getControllerStatus(OLED_INST) & DL_I2C_CONTROLLER_STATUS_IDLE));
+    wait_count = OLED_I2C_WAIT_LIMIT;
+    while ((DL_I2C_getControllerStatus(OLED_INST) &
+            DL_I2C_CONTROLLER_STATUS_IDLE) == 0U) {
+        if (--wait_count == 0U) {
+            oled_available = 0U;
+            return;
+        }
+    }
     
     // 2. 将 2 个字节填入发送 FIFO
     DL_I2C_fillControllerTXFIFO(OLED_INST, txData, 2);
     
     // 3. 启动传输
-    DL_I2C_startControllerTransfer(OLED_INST, 0x3C, DL_I2C_CONTROLLER_DIRECTION_TX, 2);
+    DL_I2C_startControllerTransfer(
+        OLED_INST,
+        OLED_I2C_ADDRESS,
+        DL_I2C_CONTROLLER_DIRECTION_TX,
+        2U
+    );
     
     // 4. 等待总线变为 BUSY 状态 (确保硬件状态机已经启动，比 delay 更可靠)
-    while (!(DL_I2C_getControllerStatus(OLED_INST) & DL_I2C_CONTROLLER_STATUS_BUSY_BUS));
-    
-    // 5. 再次等待 I2C 回到空闲状态 (代表本次传输真正完成)
-    while (!(DL_I2C_getControllerStatus(OLED_INST) & DL_I2C_CONTROLLER_STATUS_IDLE));
+    /* First wait until hardware has actually accepted START and owns bus. */
+    wait_count = OLED_I2C_WAIT_LIMIT;
+    do {
+        status = DL_I2C_getControllerStatus(OLED_INST);
+        if ((status & DL_I2C_CONTROLLER_STATUS_ERROR) != 0U) {
+            oled_available = 0U;
+            return;
+        }
+        if ((status & DL_I2C_CONTROLLER_STATUS_BUSY_BUS) != 0U) {
+            break;
+        }
+    } while (--wait_count != 0U);
+
+    if (wait_count == 0U) {
+        oled_available = 0U;
+        return;
+    }
+
+    /* Then wait until STOP has completed and the controller is idle again. */
+    wait_count = OLED_I2C_WAIT_LIMIT;
+    do {
+        status = DL_I2C_getControllerStatus(OLED_INST);
+        if ((status & DL_I2C_CONTROLLER_STATUS_ERROR) != 0U) {
+            oled_available = 0U;
+            return;
+        }
+        if ((status & DL_I2C_CONTROLLER_STATUS_IDLE) != 0U) {
+            return;
+        }
+    } while (--wait_count != 0U);
+
+    oled_available = 0U;
+#endif
 }
 
 //开启OLED显示 
@@ -78,6 +201,34 @@ void OLED_Refresh(void)
 	   OLED_WR_Byte(0x10,OLED_CMD);   //设置高列起始地址
 	   for(n=0;n<128;n++)
 		 OLED_WR_Byte(OLED_GRAM[n][i],OLED_DATA);
+	}
+}
+
+void OLED_RefreshArea(u8 x_start, u8 y_start, u8 x_end, u8 y_end)
+{
+	u8 page;
+	u8 x;
+	u8 first_page;
+	u8 last_page;
+
+	if (x_start >= 128U || y_start >= 64U ||
+		x_end <= x_start || y_end <= y_start)
+	{
+		return;
+	}
+	if (x_end > 128U) x_end = 128U;
+	if (y_end > 64U) y_end = 64U;
+
+	first_page = y_start / 8U;
+	last_page = (u8)((y_end - 1U) / 8U);
+
+	for (page = first_page; page <= last_page; page++)
+	{
+		OLED_WR_BP(x_start, page);
+		for (x = x_start; x < x_end; x++)
+		{
+			OLED_WR_Byte(OLED_GRAM[x][page], OLED_DATA);
+		}
 	}
 }
 
@@ -286,8 +437,10 @@ void OLED_ShowPicture(u8 x0,u8 y0,u8 x1,u8 y1,u8 BMP[])
 //OLED的初始化
 void OLED_Init(void)
 {
-	// 4针OLED没有RST引脚，直接延时等待屏幕内部RC电路上电复位完成
-	delay_ms(100);
+	/* 不再针对开发板RST执行额外恢复，只处理整车断电后的冷启动。 */
+	oled_i2c_error_count = 0U;
+	/* 整车断电冷启动：等待OLED电源和内部电荷泵稳定。 */
+	delay_ms(200U);
 	
 	OLED_WR_Byte(0xAE,OLED_CMD);//--turn off oled panel
 	OLED_WR_Byte(0x00,OLED_CMD);//---set low column address

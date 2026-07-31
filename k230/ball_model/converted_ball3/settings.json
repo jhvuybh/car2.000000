@@ -1,0 +1,21 @@
+{
+  "settings_version": "0.0.6",
+  "datasets_dir": "C:\\Users\\lyc\\Desktop\\datasets",
+  "weights_dir": "C:\\Users\\lyc\\Desktop\\code\\weights",
+  "runs_dir": "C:\\Users\\lyc\\Desktop\\code\\runs",
+  "uuid": "a43f543eb8fb72be4c5d81a4f48b9623883d28abd39de8ee8e0d40a66909d2db",
+  "sync": true,
+  "api_key": "",
+  "openai_api_key": "",
+  "clearml": true,
+  "comet": true,
+  "dvc": true,
+  "hub": true,
+  "mlflow": true,
+  "neptune": true,
+  "raytune": true,
+  "tensorboard": false,
+  "wandb": false,
+  "vscode_msg": true,
+  "openvino_msg": false
+}

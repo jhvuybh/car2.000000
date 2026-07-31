@@ -41,6 +41,8 @@ void car_turn_right_90(void);// 小车右转90度
  * 每通过一个返程路口后调用reset，使下一段路程从0开始计算。
  */
 void motor_odometer_reset(void);
+/* 只有需要测量行驶距离的任务才使能，关闭后保留当前读数。 */
+void motor_odometer_set_enabled(uint8_t enabled);
 float motor_odometer_get_mm(void);
 
 
